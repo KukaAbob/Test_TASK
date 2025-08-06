@@ -1,3 +1,6 @@
+// это тестнет trongrid с контрактом trc20 usdt
+
+
 const { TronWeb } = require('tronweb');
 const express = require('express');
 const fetch = require('node-fetch');
@@ -23,24 +26,18 @@ const options = {
 };
 const specs = swaggerJsdoc(options);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs));
-// Mock балансы для тестирования
 const mockBalances = new Map();
 
-// Функция для автоматического пополнения тестового адреса USDT
 async function fundTestAddress(address, amount) {
   try {
     console.log(`Пополнение адреса ${address} на сумму ${amount} USDT...`);
-    
-    // Симулируем задержку транзакции
     setTimeout(() => {
-      // Добавляем баланс в mock хранилище
       mockBalances.set(address, amount);
       console.log(`✅ Тестовое пополнение ${amount} USDT на адрес ${address} выполнено`);
-      
-      // Создаем mock транзакцию
+
       const mockTx = {
         transaction_id: `mock_tx_${Date.now()}`,
-        value: (amount * 1e6).toString(), // USDT использует 6 десятичных знаков
+        value: (amount * 1e6).toString(),
         from: 'TTestFaucetAddress123456789',
         to: address,
         token_info: {
@@ -51,7 +48,6 @@ async function fundTestAddress(address, amount) {
         block_timestamp: Date.now()
       };
       
-      // Добавляем транзакцию в платеж
       if (payments.has(address)) {
         const payment = payments.get(address);
         payment.transactions.push(mockTx);
@@ -71,8 +67,6 @@ async function generatePaymentAddress(orderId, amount, ttlMinutes) {
   const address = account.address.base58;
   const expiration = Date.now() + ttlMinutes * 60 * 1000;
   payments.set(address, { orderId, amount, expiration, status: 'pending', transactions: [] });
-  
-  // Автоматически пополняем тестовый адрес для демонстрации
   await fundTestAddress(address, amount);
   
   setTimeout(() => {
@@ -83,12 +77,9 @@ async function generatePaymentAddress(orderId, amount, ttlMinutes) {
   return address;
 }
 async function getUsdtBalance(address) {
-  // Сначала проверяем mock баланс для тестирования
   if (mockBalances.has(address)) {
     return mockBalances.get(address);
   }
-  
-  // Если mock баланса нет, проверяем реальный баланс
   try {
     const contract = await tronWeb.contract().at(usdtContractAddress);
     const balance = await contract.balanceOf(address).call({ from: 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb' });
@@ -100,12 +91,9 @@ async function getUsdtBalance(address) {
 }
 async function getTransactions(address) {
   const payment = payments.get(address);
-  // For mock payments, the transactions are already in the `payments` map
   if (payment && payment.transactions.length > 0) {
     return payment.transactions;
   }
-
-  // For real addresses, fetch from TronGrid
   try {
     const url = `https://api.shasta.trongrid.io/v1/accounts/${address}/transactions/trc20`;
     const response = await fetch(url, { headers: { 'accept': 'application/json' } });
@@ -122,25 +110,18 @@ async function getCurrentBlock() {
 async function getTransactionInfo(txId) {
   return await tronWeb.trx.getTransactionInfo(txId);
 }
-async function sendNotification(orderId, message) {
-  console.log(`Notification for order ${orderId}: ${message}`);
-  // TODO: Implement real notification, e.g., fetch to webhook
-  // await fetch('https://your-api.com/notify', { method: 'POST', body: JSON.stringify({ orderId, message }) });
-}
+
 async function monitorPayments() {
   setInterval(async () => {
     for (let [address, info] of payments) {
       try {
-        // Skip if already confirmed
         if (info.status === 'confirmed') {
           continue;
         }
-
         if (Date.now() > info.expiration) {
           payments.delete(address);
           continue;
         }
-
         const balance = await getUsdtBalance(address);
         console.log(`Current balance for address ${address} (order ${info.orderId}): ${balance} USDT`);
 
@@ -148,7 +129,6 @@ async function monitorPayments() {
           const txs = await getTransactions(address);
           console.log(`Found ${txs.length} transactions for address ${address}`);
 
-          // Find a transaction that satisfies the payment amount
           const paymentTx = txs.find(tx => 
             tx.token_info.address === usdtContractAddress && 
             (Number(tx.value) / 1e6) >= info.amount
@@ -157,21 +137,19 @@ async function monitorPayments() {
           if (paymentTx) {
             console.log(`Processing transaction ${paymentTx.transaction_id} for ${info.amount} USDT.`);
             
-            // For mock transactions, confirm immediately
             if (paymentTx.transaction_id.startsWith('mock_tx_')) {
               info.status = 'confirmed';
-              info.transactions = [paymentTx]; // Store the confirming transaction
+              info.transactions = [paymentTx]; 
               await sendNotification(info.orderId, 'Payment confirmed');
               console.log(`✅ Mock платеж подтвержден для заказа ${info.orderId}`);
             } else {
-              // For real transactions, check for confirmations
               const txInfo = await getTransactionInfo(paymentTx.transaction_id);
               if (txInfo && txInfo.blockNumber) {
                 const currentBlock = await getCurrentBlock();
                 const confirmations = currentBlock.block_header.raw_data.number - txInfo.blockNumber + 1;
-                if (confirmations >= 3) { // Check for 3 confirmations
+                if (confirmations >= 3) { 
                   info.status = 'confirmed';
-                  info.transactions = [paymentTx]; // Store the confirming transaction
+                  info.transactions = [paymentTx];
                   await sendNotification(info.orderId, 'Payment confirmed');
                   console.log(`✅ Payment confirmed for order ${info.orderId} with tx ${paymentTx.transaction_id}`);
                 }
@@ -183,7 +161,7 @@ async function monitorPayments() {
         console.error(`Error monitoring address ${address}: ${error.message}`);
       }
     }
-  }, 30000); // Check every 30 seconds
+  }, 30000);
 }
 monitorPayments();
 /**
@@ -301,7 +279,6 @@ app.get('/payment-status/:address', (req, res) => {
 app.get('/transactions/:address', async (req, res) => {
   try {
     const transactions = await getTransactions(req.params.address);
-    // Format transactions for display
     const formattedTransactions = transactions.map(tx => ({
       ...tx,
       value: (Number(tx.value) / 1e6).toFixed(2)
